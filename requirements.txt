@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+discord.py
+memorag
+faiss-cpu
+sentence-transformers
+pandas
+plotly
