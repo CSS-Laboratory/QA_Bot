@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.env
+.env.local
+.data
+/data/cache/
+/data/logs/
+/data/escalations.csv
+/data/pickle/
+/.pytest_cache/
