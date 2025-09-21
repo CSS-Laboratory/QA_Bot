@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>QAボットダッシュボード</title>
+  <style>
+    body { font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; margin: 2rem; background: #f4f6f8; color: #222; }
+    h1 { margin-bottom: 1rem; }
+    p { line-height: 1.6; }
+    .card { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 640px; }
+    a { color: #1976d2; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>QAボット ダッシュボード</h1>
+    <p>設定が完了しました。APIエンドポイント（/metrics/*, /export）を利用してダッシュボードとレポートを取得できます。</p>
+    <p>現在のRAGエンジン: <strong>{{ current_engine }}</strong></p>
+    <p>設定を再編集する場合は <a href="/setup">/setup</a> にアクセスしてください。</p>
+  </div>
+</body>
+</html>

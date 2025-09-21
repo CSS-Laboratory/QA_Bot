@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>QAボット設定ウィザード</title>
+  <style>
+    body { font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; margin: 2rem; background: #fafafa; color: #222; }
+    h1 { margin-bottom: 1rem; }
+    section { background: #fff; padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+    label { display: block; margin: 0.5rem 0; }
+    input[type="text"], input[type="password"], textarea, select, input[type="number"] {
+      width: 100%; padding: 0.6rem; border-radius: 4px; border: 1px solid #ccc;
+    }
+    textarea { min-height: 120px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); grid-gap: 1rem; }
+    .message { padding: 0.8rem; background: #e8f5e9; border: 1px solid #81c784; color: #2e7d32; margin-bottom: 1rem; border-radius: 4px; }
+    .error { padding: 0.8rem; background: #ffebee; border: 1px solid #ef5350; color: #c62828; margin-bottom: 1rem; border-radius: 4px; }
+    button { padding: 0.6rem 1.2rem; border-radius: 4px; border: none; background: #1976d2; color: #fff; cursor: pointer; }
+    button.secondary { background: #455a64; }
+    .actions { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
+    .note { font-size: 0.9rem; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>QAボット設定ウィザード</h1>
+  {% if message %}<div class="message">{{ message }}</div>{% endif %}
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <section>
+    <h2>環境診断</h2>
+    <p class="note">起動時に自動検出したGPUやライブラリの状況を表示しています。必要に応じて「環境再検出」を再読み込みで行ってください。</p>
+    <table>
+      <tr><th>GPU利用可</th><td>{{ 'はい' if env_info.gpu else 'いいえ' }}</td></tr>
+      <tr><th>torchバージョン</th><td>{{ env_info.torch_version or '不明' }}</td></tr>
+      <tr><th>CUDAバージョン</th><td>{{ env_info.cuda_version or '不明' }}</td></tr>
+      <tr><th>memorag</th><td>{{ '読み込み成功' if env_info.memorag else '未インストール' }}</td></tr>
+      <tr><th>faiss-gpu</th><td>{{ 'GPU対応' if env_info.faiss_gpu else 'GPU未検出' }}</td></tr>
+      <tr><th>自動判定エンジン</th><td>{{ auto_engine }}</td></tr>
+      <tr><th>現在のエンジン</th><td>{{ current_engine }}</td></tr>
+    </table>
+  </section>
+
+  <form method="post" action="/setup/save">
+    <section>
+      <h2>基本設定</h2>
+      {% if token_required %}
+        <label>アクセスコード
+          <input type="password" name="access_token" placeholder="コンソールに表示されたコード" />
+        </label>
+      {% endif %}
+      <label>動作モード
+        <select name="mode">
+          <option value="test" {% if defaults.mode == 'test' %}selected{% endif %}>テストモード（ローカルMarkdown）</option>
+          <option value="prod" {% if defaults.mode == 'prod' %}selected{% endif %}>本番モード（Googleドキュメント）</option>
+        </select>
+      </label>
+      <label>RAGエンジン
+        <select name="rag_engine">
+          <option value="auto" {% if defaults.rag_engine == 'auto' %}selected{% endif %}>AUTO（推奨）</option>
+          <option value="memorag" {% if defaults.rag_engine == 'memorag' %}selected{% endif %}>MemoRAGを強制</option>
+          <option value="rag" {% if defaults.rag_engine == 'rag' %}selected{% endif %}>標準RAGを強制</option>
+        </select>
+      </label>
+    </section>
+
+    <section>
+      <h2>Discord設定</h2>
+      <div class="grid">
+        <label>DISCORD_BOT_TOKEN<input type="text" name="discord_token" value="{{ defaults.discord_token }}" /></label>
+        <label>DISCORD_APP_ID<input type="text" name="discord_app_id" value="{{ defaults.discord_app_id }}" /></label>
+        <label>TEACHER_USER_ID<input type="text" name="teacher_user_id" value="{{ defaults.teacher_user_id }}" /></label>
+        <label>ESCALATION_CHANNEL_ID<input type="text" name="escalation_channel_id" value="{{ defaults.escalation_channel_id }}" /></label>
+        <label>ALERTS_CHANNEL_ID<input type="text" name="alerts_channel_id" value="{{ defaults.alerts_channel_id }}" /></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>LLM / メモリ設定</h2>
+      <div class="grid">
+        <label>GEN_PROVIDER<input type="text" name="gen_provider" value="{{ defaults.gen_provider }}" placeholder="例: openai" /></label>
+        <label>GEN_MODEL<input type="text" name="gen_model" value="{{ defaults.gen_model }}" placeholder="gpt-5-nano など" /></label>
+        <label>OPENAI_API_KEY<input type="password" name="openai_api_key" value="{{ defaults.openai_api_key }}" /></label>
+        <label>MEM_MODEL<input type="text" name="mem_model" value="{{ defaults.mem_model }}" /></label>
+        <label>RET_MODEL<input type="text" name="ret_model" value="{{ defaults.ret_model }}" /></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>知識ベース設定</h2>
+      <p class="note">テストモードではMarkdownファイル、またはテキストを直接入力してください。本番モードではGoogle Drive関連の項目が必須です。</p>
+      <div class="grid">
+        <label>KNOWLEDGE_TEXT_PATH<input type="text" name="knowledge_text_path" value="{{ defaults.knowledge_text_path }}" placeholder="./data/knowledge_test.md" /></label>
+        <label>KNOWLEDGE_TEXT<textarea name="knowledge_text" placeholder="直接本文を貼り付ける場合はこちら">{{ defaults.knowledge_text }}</textarea></label>
+        <label>GOOGLE_SERVICE_ACCOUNT_JSON<input type="text" name="google_service_account_json" value="{{ defaults.google_service_account_json }}" placeholder="./secrets/sa.json" /></label>
+        <label>GOOGLE_DRIVE_FOLDER_ID<input type="text" name="google_drive_folder_id" value="{{ defaults.google_drive_folder_id }}" /></label>
+        <label>FAQ_MASTER_DOC_ID<input type="text" name="faq_master_doc_id" value="{{ defaults.faq_master_doc_id }}" /></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>高度設定</h2>
+      <div class="grid">
+        <label>RETRIEVAL_SCORE_MIN<input type="number" step="0.01" name="retrieval_score_min" value="{{ defaults.retrieval_score_min }}" /></label>
+        <label>MAX_TOKENS<input type="number" name="max_tokens" value="{{ defaults.max_tokens }}" /></label>
+        <label>TEMPERATURE<input type="number" step="0.01" name="temperature" value="{{ defaults.temperature }}" /></label>
+        <label>BEACON_RATIO<input type="number" name="beacon_ratio" value="{{ defaults.beacon_ratio }}" /></label>
+        <label>チャンク長<input type="number" name="chunk_size" value="{{ defaults.chunk_size }}" /></label>
+        <label>チャンク重なり<input type="number" name="chunk_overlap" value="{{ defaults.chunk_overlap }}" /></label>
+        <label>ダッシュボード既定期間（日）<input type="number" name="default_days" value="{{ defaults.default_days }}" /></label>
+        <label>クラスタ手法<input type="text" name="cluster_method" value="{{ defaults.cluster_method }}" placeholder="hdbscan / kmeans" /></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>接続テスト</h2>
+      <p class="note">保存前に形式のチェックが行えます。</p>
+      <div class="actions">
+        <button type="button" class="secondary" onclick="runDiscordTest()">Discord接続テスト</button>
+        <button type="button" class="secondary" onclick="runGoogleTest()">Google APIテスト</button>
+        <button type="button" class="secondary" onclick="runLLMTest()">LLM接続テスト</button>
+      </div>
+      <div id="test-result" class="note"></div>
+    </section>
+
+    <div class="actions">
+      <button type="submit">設定を保存</button>
+      <span class="note">保存後はプロセスを再起動してください。</span>
+    </div>
+  </form>
+
+  <script>
+    function accessTokenValue() {
+      const tokenInput = document.querySelector('input[name="access_token"]');
+      return tokenInput ? tokenInput.value : '';
+    }
+    async function postJSON(url, payload) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({ detail: 'エラーが発生しました。' }));
+        throw new Error(detail.detail || 'エラーが発生しました。');
+      }
+      return res.json();
+    }
+    function displayTestResult(text, isError=false) {
+      const box = document.getElementById('test-result');
+      box.textContent = text;
+      box.style.color = isError ? '#c62828' : '#2e7d32';
+    }
+    async function runDiscordTest() {
+      try {
+        const token = document.querySelector('input[name="discord_token"]').value;
+        const response = await postJSON('/setup/test/discord', {
+          access_token: accessTokenValue(),
+          token
+        });
+        displayTestResult(response.message);
+      } catch (err) {
+        displayTestResult(err.message, true);
+      }
+    }
+    async function runGoogleTest() {
+      try {
+        const service_json = document.querySelector('input[name="google_service_account_json"]').value;
+        const response = await postJSON('/setup/test/google', {
+          access_token: accessTokenValue(),
+          service_json
+        });
+        displayTestResult(response.message);
+      } catch (err) {
+        displayTestResult(err.message, true);
+      }
+    }
+    async function runLLMTest() {
+      try {
+        const provider = document.querySelector('input[name="gen_provider"]').value;
+        const model = document.querySelector('input[name="gen_model"]').value;
+        const api_key = document.querySelector('input[name="openai_api_key"]').value;
+        const response = await postJSON('/setup/test/llm', {
+          access_token: accessTokenValue(),
+          provider,
+          model,
+          api_key
+        });
+        displayTestResult(response.message);
+      } catch (err) {
+        displayTestResult(err.message, true);
+      }
+    }
+  </script>
+</body>
+</html>
