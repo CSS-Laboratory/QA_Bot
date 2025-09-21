@@ -21,6 +21,7 @@ class QuestionLogEntry:
     score: float
     mode: str
     escalated: bool
+    engine: str
 
     def to_csv_row(self) -> List[str]:
         return [
@@ -33,6 +34,7 @@ class QuestionLogEntry:
             f"{self.score:.4f}",
             self.mode,
             "1" if self.escalated else "0",
+            self.engine,
         ]
 
 
@@ -47,6 +49,7 @@ class QuestionLogger:
         "score",
         "mode",
         "escalated",
+        "engine",
     ]
 
     def __init__(self, file_path: Path) -> None:

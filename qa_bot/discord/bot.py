@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from qa_bot.config import AppConfig
-from qa_bot.rag.memorag_client import Answer
+from qa_bot.rag.pipelines import Answer
 from qa_bot.service import EscalationPayload, QABotService
 
 
@@ -80,6 +80,7 @@ class QADiscordBot(commands.Bot):
         escalated = sum(1 for r in recent if r["escalated"])
         text = (
             f"モード: {self.config.knowledge.mode}\n"
+            f"RAGエンジン: {self.service.pipeline_name}\n"
             f"ドキュメント数: {doc_count}\n"
             f"直近7日の質問数: {len(recent)} (エスカレーション {escalated})"
         )

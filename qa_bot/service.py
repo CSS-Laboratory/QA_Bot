@@ -1,4 +1,4 @@
-"""Core orchestration service tying together knowledge, RAG and storage."""
+"""Core orchestration tying knowledge sources and retrieval pipelines."""
 from __future__ import annotations
 
 import csv
@@ -11,7 +11,7 @@ from qa_bot.config import AppConfig
 from qa_bot.knowledge.base import Document
 from qa_bot.knowledge.google_docs import GoogleDriveKnowledgeSource
 from qa_bot.knowledge.local import LocalMarkdownKnowledgeSource
-from qa_bot.rag.memorag_client import Answer, MemoRAGClient
+from qa_bot.rag.pipelines import Answer, MemoRAGPipeline, StandardRAGPipeline
 from qa_bot.storage import (
     EmbeddingRecord,
     EmbeddingStore,
@@ -21,6 +21,7 @@ from qa_bot.storage import (
     QuestionLogEntry,
     QuestionLogger,
 )
+from qa_bot.utils.env import EnvironmentInfo, probe_env, select_pipeline
 from qa_bot.utils.text import normalize_text
 
 
@@ -36,22 +37,27 @@ class EscalationPayload:
 
 
 class QABotService:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, env_info: EnvironmentInfo | None = None) -> None:
         self.config = config
         self.config.ensure_directories()
+        self.env_info = env_info or probe_env()
+        self.pipeline_name = select_pipeline(self.env_info, config.rag.engine)
+        if self.pipeline_name == "memorag":
+            self.pipeline = MemoRAGPipeline(config.rag, config.knowledge.cache_dir)
+        else:
+            self.pipeline = StandardRAGPipeline(config.rag)
         self.question_logger = QuestionLogger(config.dashboard.logs_file)
         self.escalation_logger = EscalationLogger(config.dashboard.escalations_file)
         self.state = PickleState(config.dashboard.data_root / "pickle" / "state.pkl")
         self.embedding_store = EmbeddingStore(config.dashboard.embeddings_file)
-        self.memo_client = MemoRAGClient(config.rag, config.knowledge.cache_dir)
+        self.documents: List[Document] = []
+        self.document_map: Dict[str, Document] = {}
         stored_faq = self.state.get("faq_master_doc_id")
         if stored_faq and not self.config.knowledge.faq_master_doc_id:
             self.config.knowledge.faq_master_doc_id = stored_faq
         stored_folder = self.state.get("google_drive_folder_id")
         if stored_folder and not self.config.knowledge.google_drive_folder_id:
             self.config.knowledge.google_drive_folder_id = stored_folder
-        self.documents: List[Document] = []
-        self.document_map: Dict[str, Document] = {}
         self._escalation_callback: Optional[Callable[[EscalationPayload], None]] = None
 
     # ------------------------------------------------------------------
@@ -64,7 +70,7 @@ class QABotService:
     def bootstrap(self, *, force_reindex: bool = False) -> None:
         self.documents = list(self._load_documents())
         self.document_map = {doc.doc_id: doc for doc in self.documents}
-        self.memo_client.build_memory(self.documents, force=force_reindex)
+        self.pipeline.build(self.documents, force=force_reindex)
 
     def rebuild_memory(self) -> None:
         self.bootstrap(force_reindex=True)
@@ -78,15 +84,16 @@ class QABotService:
                 raise RuntimeError("GoogleサービスアカウントのJSONパスが設定されていません。")
             if not folder_id:
                 raise RuntimeError("Google DriveフォルダIDが設定されていません。")
-            return GoogleDriveKnowledgeSource(
+            source = GoogleDriveKnowledgeSource(
                 service_account_json=service_json,
                 folder_id=folder_id,
                 faq_master_doc_id=self.config.knowledge.faq_master_doc_id,
-            ).load_documents()
-        # default: test/local mode
+            )
+            return source.load_documents()
         if self.config.knowledge.knowledge_text_path:
-            path = self.config.knowledge.knowledge_text_path
-            return LocalMarkdownKnowledgeSource(path=path).load_documents()
+            return LocalMarkdownKnowledgeSource(
+                path=self.config.knowledge.knowledge_text_path
+            ).load_documents()
         if self.config.knowledge.knowledge_text_inline:
             return LocalMarkdownKnowledgeSource(
                 inline_text=self.config.knowledge.knowledge_text_inline
@@ -102,7 +109,7 @@ class QABotService:
         channel_id: str,
     ) -> Answer:
         normalized = normalize_text(question)
-        answer = self.memo_client.answer(normalized)
+        answer = self.pipeline.answer(normalized)
         now = datetime.now(timezone.utc)
         log_entry = QuestionLogEntry(
             timestamp=now,
@@ -114,6 +121,7 @@ class QABotService:
             score=answer.score,
             mode=self.config.knowledge.mode,
             escalated=answer.needs_escalation,
+            engine=self.pipeline_name,
         )
         self.question_logger.append(log_entry)
         question_id = self._question_id(now, user_id, normalized)
@@ -163,12 +171,7 @@ class QABotService:
         if self._escalation_callback:
             self._escalation_callback(payload)
         elif self.config.knowledge.mode == "test":
-            print(
-                "[ESCALATION]",
-                payload.question,
-                payload.user_id,
-                payload.channel_id,
-            )
+            print("[ESCALATION]", payload.question, payload.user_id, payload.channel_id)
 
     # ------------------------------------------------------------------
     def _question_id(self, timestamp: datetime, user_id: str, question: str) -> str:
@@ -193,14 +196,16 @@ class QABotService:
 
     # ------------------------------------------------------------------
     def recent_questions(self, days: int = 7) -> List[dict]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         rows: List[dict] = []
+        if not self.config.dashboard.logs_file.exists():
+            return rows
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         with self.config.dashboard.logs_file.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    timestamp = datetime.fromisoformat(row["timestamp"])
-                except (KeyError, ValueError):
+                    timestamp = datetime.fromisoformat(row.get("timestamp", ""))
+                except (TypeError, ValueError):
                     continue
                 if timestamp >= cutoff:
                     rows.append(
@@ -214,19 +219,28 @@ class QABotService:
                             "score": float(row.get("score", "0") or 0),
                             "mode": row.get("mode", ""),
                             "escalated": row.get("escalated", "0") == "1",
+                            "engine": row.get("engine", "rag"),
                         }
                     )
         return rows
 
     # ------------------------------------------------------------------
-    def export_logs(self, *, user: str | None = None, start: datetime | None = None, end: datetime | None = None) -> List[QuestionLogEntry]:
+    def export_logs(
+        self,
+        *,
+        user: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> List[QuestionLogEntry]:
         entries: List[QuestionLogEntry] = []
+        if not self.config.dashboard.logs_file.exists():
+            return entries
         with self.config.dashboard.logs_file.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    timestamp = datetime.fromisoformat(row["timestamp"])
-                except (KeyError, ValueError):
+                    timestamp = datetime.fromisoformat(row.get("timestamp", ""))
+                except (TypeError, ValueError):
                     continue
                 if start and timestamp < start:
                     continue
@@ -245,6 +259,8 @@ class QABotService:
                         score=float(row.get("score", "0") or 0),
                         mode=row.get("mode", ""),
                         escalated=row.get("escalated", "0") == "1",
+                        engine=row.get("engine", "rag"),
                     )
                 )
         return entries
+
